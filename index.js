@@ -1,231 +1,343 @@
-require('colors');
+require('colors')
 
-var SpecReporter = function(baseReporterDecorator, formatError, config) {
-  baseReporterDecorator(this);
+var SpecReporter = function(baseReporterDecorator, config, logger, helper, formatError) {
 
-  // colorize output of BaseReporter functions
-  if (config.colors) {
-    this.USE_COLORS            = true;
-    this.SPEC_FAILURE          = '%s %s FAILED'.red + '\n';
-    this.SPEC_SLOW             = '%s SLOW %s: %s'.yellow + '\n';
-    this.ERROR                 = '%s ERROR'.red + '\n';
-    this.FINISHED_ERROR        = ' ERROR'.red;
-    this.FINISHED_SUCCESS      = ' SUCCESS'.green;
-    this.FINISHED_DISCONNECTED = ' DISCONNECTED'.red;
-    this.X_FAILED              = ' (%d FAILED)'.red;
-    this.TOTAL_SUCCESS         = 'TOTAL: %d SUCCESS'.green + '\n';
-    this.TOTAL_FAILED          = 'TOTAL: %d FAILED, %d SUCCESS'.red + '\n';
-  } else {
-    this.USE_COLORS = false;
+  var cfg = {
+
+    maxLogLines: undefined,
+
+    /* Use colors or not? */
+    colors: config.colors || true,
+
+    lateReport: config.specReporter.lateReport || true,
+
+    /* Skip some part of the reports */
+    suppressFailed:  config.specReporter.suppressFailed || false,
+    suppressSuccess: config.specReporter.suppressSuccess || false,
+    suppressSkipped: config.specReporter.suppressSkipped || false,
+
+    /* Prefixe use for decoration on the reporter */
+    prefix: {
+      success: '✓ ',
+      failure: '✗ ',
+      skipped: '  '
+    },
+
+    /* Time ranges */
+    fast: 20,
+    slow: 40
   }
 
-  this.onRunComplete = function(browsers, results) {
-    if (config.specReporter.statReport) {
-      this.statReport()
-    }
+  // We wish to build on the basic reporter's properties and methods
+  baseReporterDecorator(this)
 
-    // the renderBrowser function is defined in karma/reporters/Base.js
-    this.writeCommonMsg('\n' + browsers.map(this.renderBrowser).join('\n') + '\n');
+  // We wish to send to the output to the console, and that every message we output will
+  // be on a different line
+  this.adapters = [function(msg) { 
+      process.stdout.write.bind(process.stdout)(msg + "\r\n")
+  }]
 
-    if (browsers.length > 1 && !results.disconnected && !results.error) {
-      if (!results.failed) {
-        this.write(this.TOTAL_SUCCESS, results.success);
-      } else {
-        this.write(this.TOTAL_FAILED, results.failed, results.success);
+  this.currentSuite = []
+  this.faildTests   = []
+
+  /* 
+  * Templates 
+  */
+  this.BROWSER_REGISTER = 'INFO %s is register\n'
+  this.LOG_SINGLE_BROWSER = 'INFO %s LOG: %s\n'
+  this.BROWSER_COMPLETE = 'INFO %s COMPLETE: %s SUCCESS, %s SKIPPED, %s FAILED, %s TOTAL, %s TOTAL TIME (ms)\n'
+  this.LATE_REPORT = '\nERROR THERE %s FAILD TESTS:\n'
+
+  this.SUCCESS = cfg.prefix.success + '- %s'
+  this.SKIPPED = cfg.prefix.skipped + '- %s'
+  this.FAILED  = cfg.prefix.failure + '- %s'
+
+  /* Add color if needed */
+  if (cfg.colors) {
+    this.BROWSER_REGISTER   = this.BROWSER_REGISTER.yellow
+    this.LOG_SINGLE_BROWSER = this.LOG_SINGLE_BROWSER.yellow
+    this.BROWSER_COMPLETE   = 'INFO '.yellow + '%s'.cyan + ' COMPLETE: '.yellow + '%s'.green + ' SUCCESS, '.yellow + '%s'.grey + ' SKIPPED, '.yellow + '%s'.red + ' FAILED, '.yellow + '%s'.magenta +' TOTAL, %s TOTAL TIME (ms)\n'.yellow
+    this.LATE_REPORT        = this.LATE_REPORT.red
+
+    this.SUCCESS = this.SUCCESS.green
+    this.SKIPPED = this.SKIPPED.grey
+    this.FAILED  = this.FAILED.red
+  }
+
+  /*
+  * Util function
+  */
+
+  /*
+  * Get suites and print them
+  * also return indent level
+  *
+  */
+  this.suiteFormat = function(suite, self) {
+    var indent = "  "
+    suite.forEach(function(value, index) {
+        if (index >= self.currentSuite.length || self.currentSuite[index] != value) {
+          if (index === 0) self.writeCommonMsg('\n')
+
+          self.writeCommonMsg(indent + value)
+          self.currentSuite = []
+        }
+        indent += "  "
+        
+    }, self)
+
+    self.currentSuite = suite
+
+    return { indent: indent, suite: suite }
+  }
+
+  /*
+  * Format the time that the test wsa running 
+  */
+  this.testTime = function(time) {
+    var result = " ( " + time + " ms )"
+
+    if (cfg.colors) {
+      if (time > cfg.fast && time < cfg.slow) {
+        result = result.yellow
+      } else if (time < cfg.fast) {
+        result = result.green
+      } else if (time > cfg.slow) {
+        result = result.red
       }
     }
 
-    this.write("\n");
-  };
+    return result
+  }
 
-  this.statReport = function() {
-    var self = this
-    // Only when there are faild tests
-    if (this.stats.faild.length > 0) {
-      var currentSuite = []
-      var indent = "  "
+  /*
+  * Backtrace the log
+  */
+  this.backtrace = function(log) {
+    var result = '\n'
+    log.forEach(function(log) {
+        if (cfg.maxLogLines) {
+          log = log.split('\n').slice(0, cfg.maxLogLines).join('\n')
+        } 
+        result += '\n' + formatError(log, '\t')
+    })
+    if (cfg.colors) {
+      result = result.red
+    }
+    return result
+  }
 
-      var intro = "\nThere is " + this.stats.faild.length  + " faild tests \n"
+  /*
+  * LateReport will display more information about the faild test on the end of the run
+  * this is more easy way to see what really happened and don't scroll to much 
+  */
+  this.lateReport = function() {
+    if (this.faildTests.length > 0) {
 
-      if (this.USE_COLORS) {
-        intro = intro.red
-      }
+      this.write(this.LATE_REPORT, this.faildTests.length)
 
-      // Intro text
-      this.write(intro)
+      this.faildTests.forEach(function(result) {
 
-      // For every faild test
-      this.stats.faild.forEach(function(value, index) {
+          var data = this.suiteFormat(result.suite, this)
+          var indent = data.indent
+          var time = this.testTime(result.time)
 
-          // Find suites
-          value.suite.forEach(function(value, index) {
-              if (index >= currentSuite.length || currentSuite[index] != value) {
-                if (index == 0) {
-                  this.writeCommonMsg('\n');
-                }
-                if (self.USE_COLORS) {
-                  this.writeCommonMsg(indent + value.yellow + '\n');
-                } else {
-                  this.writeCommonMsg(indent + value + '\n')
-                }
-                currentSuite = []
-              }
-              indent += "  ";
-            }, self);
-          currentSuite = value.suite;
+          var msg = indent + this.FAILED + time
+          msg += this.backtrace(result.log)
 
-          // Faild test
-          var msg = "\n\t - " + value.description + "\n"
+          this.writeCommonMsg(msg, result.description)
 
-          // Output of the faild test
-          value.log.forEach(function(log) {
-              if (reporterCfg.maxLogLines) {
-                log = log.split('\n').slice(0, reporterCfg.maxLogLines).join('\n');
-              }
-              if (self.USE_COLORS) {
-                msg += '\n' + formatError(log, '\t').cyan;
-              } else {
-                msg += '\n' + formatError(log, '\t')
-              }
-              msg += "\n"
-          });
-          if (self.USE_COLORS) {
-            msg = msg.red
-          }
+      }, this)
+      
+      this.faildTests = []
+    }
+  }
 
-          // Write it on the wall
-          self.write(msg)
-      })
+  /*
+  * The launcher initiates tests on the browser ( browser init and browser reconnect )
+  *
+  * Browser: 
+  *  - id
+  *  - fullName
+  *  - name
+  *  - state
+  *  - lastResult
+  *     - success <number>
+  *     - failed <number>
+  *     - skipped <number>
+  *     - tatal
+  *     - totalTime
+  *     - netTime
+  *     - error <boolean>
+  *     - disconnected
+  *     - totalTimeEnd
+  *  - disconnectsCount
+  */
+  this.onBrowserRegister = function(browser) {
+    this.write(this.BROWSER_REGISTER, browser.fullName)
+  }
+
+  /*
+  * Browsers are ready and execution starts
+  *
+  * BrowserCollections methods:
+  *   - add
+  *   - remove
+  *   - getById
+  *   - setAllToExecuting
+  *   - AreAllReady
+  *   - serialize
+  *   - getResults
+  *   - clearResults
+  *   - clone
+  *   - map 
+  *   - forEach
+  *
+  */
+  // this.onRunStart = function(browserCollections) {
+  // }
+
+  /*
+  * current browser changes, triggered when the browser is registered and when
+  * tests complete on the browser
+  */
+  // this.onBrowserChange = function(browserCollections){
+  // }
+
+  /*
+  * The browser connects to the server 
+  */
+  // this.onBrowserStart = function(browser, info) {
+  // }
+
+  /*
+  * getting a result from a test(spec)
+  *
+  * result <Array>:
+  *   - id
+  *   - description
+  *   - suite <Array>
+  *   - success <boolean>
+  *   - skipped <boolean>
+  *   - time <int> (ms)
+  *   - log <array>
+  *   
+  */
+  // this.onSpecComplete = function(browser, result) {
+  //   if (result.skipped) {
+  //     return this.specSkipped(browser, result)
+  //   }
+  //
+  //   if (result.success) {
+  //     return this.specSuccess(browser, result)
+  //   }
+  //
+  //   return this.specFailure(browser, result)
+  // }
+
+  /*
+  * base reporte's onSpecomplete was called
+  */
+
+  /* SUCCESS */
+
+  this.specSuccess = function(browser, result) {
+    var data = this.suiteFormat(result.suite, this)
+    var indent = data.indent
+    var time = this.testTime(result.time)
+
+    var msg = indent + this.SUCCESS + time
+
+    this.writeCommonMsg(msg, result.description)
+  }
+
+  /* SKIPPED */
+  this.specSkipped = function(browser, result) {
+    var data = this.suiteFormat(result.suite, this)
+    var indent = data.indent
+    var time = this.testTime(result.time)
+
+    var msg = indent + this.SKIPPED + time
+
+    this.writeCommonMsg(msg, result.description)
+  }
+
+  /* FAILURE */
+  this.specFailure = function(browser, result) {
+    var data = this.suiteFormat(result.suite, this)
+    var indent = data.indent
+    var time = this.testTime(result.time)
+
+    var msg = indent + this.FAILED + time
+    if (cfg.lateReport === false && result.log) {
+      msg += this.backtrace(result.log)
     } else {
-      this.write('\n')
+      this.faildTests.push(result)
     }
 
-    if (this.stats.avg.length > 0) {
-      var avg_time = 0
-      this.stats.avg.forEach(function(time) {
-          avg_time = avg_time + time
-      })
-      avg_time = avg_time / this.stats.avg.length
+    this.writeCommonMsg(msg, result.description)
 
-      var speed = 'Average speed of the tests ' + avg_time + ' ms\n'
-      if (this.USE_COLORS) {
-        if (avg_time > 20 && avg_time < 40) {
-            speed = speed.yellow
-          } else if (avg_time < 20) {
-            speed = speed.green
-          } else if (avg_time > 40) {
-            speed = speed.red
-          }
-      }
-      this.write(speed)
+  }
+
+  /*
+  * nothing - this function is just to stup the method and do nothing
+  */
+  this.nothing = function() { /* Do nothing */ }
+
+  /* Link function and disabled some kind of reports */
+  this.specSuccess = cfg.suppressSuccess ? this.nothing : this.specSuccess
+  this.specSkipped = cfg.suppressSkipped ? this.nothing : this.specSkipped
+  this.specFailure = cfg.suppressFailure ? this.nothing : this.specFailure
+
+  /*
+  * finished running tests on a browser, browser disconnect, browser timeout
+  */
+  this.onBrowserComplete = function(browser) {
+
+    if (cfg.lateReport === true) {
+      this.lateReport()
     }
 
-    // Clear everything
-    this.stats.faild = []
-    this.stats.avg   = []
+    this.write(
+      this.BROWSER_COMPLETE,
+      browser.name, 
+      browser.lastResult.success, 
+      browser.lastResult.skipped, 
+      browser.lastResult.failed,
+      browser.lastResult.total,
+      browser.lastResult.totalTime
+    )
   }
 
-  this.currentSuite = [];
-
-  this.stats = {
-    avg: [],
-    faild: []
+  /*
+  * the browser encountered an error connecting to server
+  */
+  this.onBrowserError = function(browser, error) {
   }
 
-  this.writeSpecMessage = function(status) {
-    return (function(browser, result) {
-
-        var suite  = result.suite
-        var indent = "  ";
-
-        suite.forEach(function(value, index) {
-            if (index >= this.currentSuite.length || this.currentSuite[index] != value) {
-              if (index == 0) {
-                this.writeCommonMsg('\n');
-              }
-              this.writeCommonMsg(indent + value + '\n');
-              this.currentSuite = [];
-            }
-            indent += "  ";
-          }, this);
-
-        this.currentSuite = suite;
-
-        var specName = result.description;
-
-        if(this.USE_COLORS) {
-          if(result.skipped) specName = specName.cyan;
-          else if(!result.success) specName = specName.red;
-        }
-
-        var time = " (" + result.time + " ms)"
-
-        if (this.USE_COLORS) {
-          if (result.time > 20 && result.time < 40) {
-            time = time.yellow
-          } else if (result.time < 20) {
-            time = time.green
-          } else if (result.time > 40) {
-            time = time.red
-          }
-        }
-
-        // Add time of the test so we could calculate the avg 
-        this.stats.avg.push(result.time)
-
-        var msg = indent + status + specName + time;
-
-        result.log.forEach(function(log) {
-            if (reporterCfg.maxLogLines) {
-              log = log.split('\n').slice(0, reporterCfg.maxLogLines).join('\n');
-            }
-            msg += '\n' + formatError(log, '\t');
-        });
-
-        this.writeCommonMsg(msg + '\n');
-
-        if (!result.success && result.skipped === false) {
-          this.stats.faild.push(result)
-        }
-
-        // other useful properties
-        browser.id;
-        browser.fullName;
-        result.time;
-        result.skipped;
-        result.success;
-    }).bind(this);
-  };
-
-  this.LOG_SINGLE_BROWSER = '%s LOG: %s\n';
-  this.LOG_MULTI_BROWSER = '%s %s LOG: %s\n';
-
-  // On start
+  /*
+  * the browser send info to the server
+  */
   this.onBrowserLog = function(browser, log, type) {
-    if(config.logLevel === 'DISABLE'  || config.logLevel === 'ERROR' || config.logLevel === 'WARN'){return;}
-    if (this._browsers && this._browsers.length === 1) {
-      this.write(this.LOG_SINGLE_BROWSER, type.toUpperCase(), this.USE_COLORS ? log.cyan : log);
-    } else {
-      this.write(this.LOG_MULTI_BROWSER, browser, type.toUpperCase(), this.USE_COLORS ? log.cyan : log);
-    }
-  };
+    this.write(this.LOG_SINGLE_BROWSER, browser, type.toUpperCase())
+  }
 
-  function noop(){}
+  /*
+  * finished running on all browsers
+  */
+  this.onRunComplete = function(browserCollection, results) {
+    this.write('Goodbye')
+  }
 
-  var reporterCfg = config.specReporter || {};
-  var prefixes = reporterCfg.prefixes || {
-    success: '✓ ',
-    failure: '✗ ',
-    skipped: '- '
-  };
+  /*
+  * before exiting Karma
+  */
+  this.onExit = function(callback) {
+  }
+}
 
-  this.specSuccess = reporterCfg.suppressPassed ? noop : this.writeSpecMessage(this.USE_COLORS ? prefixes.success.green : prefixes.success);
-  this.specSkipped = reporterCfg.suppressSkipped ? noop : this.writeSpecMessage(this.USE_COLORS ? prefixes.skipped.cyan : prefixes.skipped);
-  this.specFailure = reporterCfg.suppressFailed ? noop : this.writeSpecMessage(this.USE_COLORS ? prefixes.failure.red : prefixes.failure);
-};
-
-SpecReporter.$inject = ['baseReporterDecorator', 'formatError', 'config'];
+SpecReporter.$inject = ['baseReporterDecorator', 'config', 'logger', 'helper', 'formatError']
 
 module.exports = {
   'reporter:spec': ['type', SpecReporter]
-};
+}

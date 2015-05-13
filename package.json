@@ -1,20 +1,20 @@
 {
-  "name": "karma-spec-reporter",
+  "name": "karma-spec-reporter-2",
   "version": "0.0.16",
-  "description": "A Karma plugin. Report all spec-results to console (like mocha's spec reporter).",
+  "description": "A Karma plugin. Report all spec-results to console - based on karma-spec-reporter.",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "git://github.com/mlex/karma-spec-reporter.git"
+    "url": "git://github.com/bdryanovski/karma-spec-reporter-2.git"
   },
   "keywords": [
     "karma-plugin",
     "reporter"
   ],
-  "author": "Michael Lex <michael.lex@codecentric.de>",
+  "author": "Bozhidar Dryanovski <bozhidar.dryanovski@gmail.com>",
   "dependencies": {
     "colors":"~0.6.0"
   },
