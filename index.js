@@ -319,7 +319,10 @@ var SpecReporter = function(baseReporterDecorator, config, logger, helper, forma
   * the browser send info to the server
   */
   this.onBrowserLog = function(browser, log, type) {
-    this.write(this.LOG_SINGLE_BROWSER, browser, type.toUpperCase())
+    if (cfg.colors) {
+      var log = log.cyan
+    }
+    this.write(this.LOG_SINGLE_BROWSER, browser, type.toUpperCase(), log)
   }
 
   /*
