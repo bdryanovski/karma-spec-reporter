@@ -3,6 +3,12 @@
 Test reporter, that prints detailed results to console (similar to mocha's spec reporter).
 Based on the `npm install karma-spec-reporter` - but with few changes
 
+# Installation
+
+```bash
+  $ npm install karma-spec-reporter-2
+```
+
 There are few configuration that you could apply to the reporter.
 ``` js
 //karma.conf.js
@@ -27,8 +33,9 @@ There are few configuration that you could apply to the reporter.
         // Don't show skipped tests
         suppressSkipped: false,
 
-        slowTestTime: 20,
-        fastTestTime: 40
+        // Every test that is more slower than the slowest test is mark as slow
+        slowTestTime: 40,
+        fastTestTime: 20
 
       },
       plugins: ["karma-spec-reporter"],
